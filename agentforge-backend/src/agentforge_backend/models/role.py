@@ -1,0 +1,1 @@
+# Role is implemented as an Enum in user.py; this file is kept for future expansion.

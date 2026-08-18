@@ -1,0 +1,88 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: agentforge-postgres
+    environment:
+      POSTGRES_USER: backend
+      POSTGRES_PASSWORD: backendpass
+      POSTGRES_DB: agentforge
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U backend -d agentforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: agentforge-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentforge-backend
+    ports:
+    - "8000:8000"
+    environment:
+       - ENVIRONMENT=development
+       - DATABASE_URL=postgresql+asyncpg://backend:backendpass@postgres:5432/agentforge
+       - REDIS_URL=redis://redis:6379/0
+       - JWT_SECRET=change_this_in_production_please
+       - CORS_ORIGINS=["http://localhost:3000","http://localhost:8000"]
+    depends_on:
+      postgres:
+       condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn agentforge_backend.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./src:/app/src
+      - ./pyproject.toml:/app/pyproject.toml
+    networks:
+      - default
+      - agentforge-network
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: agentforge-worker
+    environment:
+      - ENVIRONMENT=development
+      - DATABASE_URL=postgresql+asyncpg://backend:backendpass@postgres:5432/agentforge
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A agentforge_backend.workers.celery_app worker --loglevel=info
+    volumes:
+      - ./src:/app/src
+    networks:
+      - default
+      - agentforge-network
+    restart: unless-stopped
+
+networks:
+  agentforge-network:
+    external: true
+
+volumes:
+  postgres_data:
