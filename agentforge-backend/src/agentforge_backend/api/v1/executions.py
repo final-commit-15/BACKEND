@@ -5,6 +5,7 @@ from ...services.execution_service import ExecutionService
 from ...middleware.auth import get_current_user_id
 from ...schemas.execution import ExecutionStart, ExecutionOut
 from ...websocket.manager import ws_manager
+from ...utils.exceptions import NotFoundError, PermissionDeniedError
 
 router = APIRouter(prefix="/executions", tags=["executions"])
 
@@ -14,7 +15,24 @@ async def start_execution(
     current_user_id: str = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db)
 ):
-    return await ExecutionService.start(db, data.agent_id, data.task_id, data.input, current_user_id)
+    try:
+        return await ExecutionService.start(
+            db,
+            str(data.agent_id),
+            str(data.task_id) if data.task_id else None,
+            data.input,
+            current_user_id
+        )
+    except NotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=str(e)
+        )
+    except PermissionDeniedError as e:
+        raise HTTPException(
+            status_code=403,
+            detail=str(e)
+        )
 
 @router.get("/{execution_id}", response_model=ExecutionOut)
 async def get_execution(execution_id: str, db: AsyncSession = Depends(get_db)):

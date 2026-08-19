@@ -4,7 +4,7 @@ from ..models.workspace import Workspace, WorkspaceRole
 from ..models.workspace_member import WorkspaceMember
 from ..models.user import User
 from ..schemas.workspace import WorkspaceCreate, WorkspaceMemberAdd
-from ..utils.exceptions import NotFoundError, PermissionDeniedError
+from ..utils.exceptions import NotFoundError, PermissionDeniedError, ConflictError
 
 class WorkspaceService:
     @staticmethod

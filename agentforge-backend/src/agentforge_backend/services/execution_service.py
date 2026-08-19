@@ -1,3 +1,9 @@
+from xmlrpc import client
+
+from agentforge_backend import db
+from ..models.task import Task
+from agentforge_backend.db.session import AsyncSessionLocal
+from agentforge_backend.schemas import agent, task
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from ..models.execution import Execution, ExecutionStatus
@@ -5,7 +11,7 @@ from ..models.execution_log import ExecutionLog, LogSeverity
 from ..models.agent import Agent
 from ..clients.agents import AgentsClient
 from ..websocket.manager import ws_manager
-from ..utils.exceptions import NotFoundError
+from ..utils.exceptions import NotFoundError, PermissionDeniedError
 from uuid import uuid4
 import asyncio
 from datetime import datetime
@@ -13,13 +19,23 @@ from datetime import datetime
 class ExecutionService:
     @staticmethod
     async def start(db: AsyncSession, agent_id: str, task_id: str | None, input_data: dict, user_id: str) -> Execution:
-        # verify agent exists and belongs to user (or user has access)
+       
+     # verify agent exists and belongs to user (or user has access)
         agent = await db.get(Agent, agent_id)
         if not agent:
             raise NotFoundError("Agent not found")
+
+        if not agent.is_active:
+            raise PermissionDeniedError("Agent is disabled")
+
         if str(agent.owner_id) != user_id:
             # TODO: check workspace permissions
-            pass
+            raise PermissionDeniedError("Access denied")
+
+        if task_id:
+            task = await db.get(Task, task_id)
+            if not task:
+                raise NotFoundError("Task not found")
 
         execution = Execution(
             id=uuid4(),
@@ -42,51 +58,108 @@ class ExecutionService:
         return await db.get(Execution, execution_id)
 
     @staticmethod
-    async def _run(db: AsyncSession, execution_id: str):
-        # This method is called by the worker
-        execution = await db.get(Execution, execution_id)
-        if not execution:
-            return
-        agent = await db.get(Agent, execution.agent_id)
-        if not agent:
-            execution.status = ExecutionStatus.FAILED
-            execution.error = "Agent not found"
-            await db.commit()
-            return
+    async def _run(execution_id: str):
+        from ..db.session import AsyncSessionLocal
 
-        # Prepare agent config
-        config = {
-            "name": agent.name,
-            "type": agent.agent_type,
-            "system_prompt": agent.system_prompt,
-            "model": agent.model,
-            "temperature": agent.temperature,
-            "max_tokens": agent.max_tokens,
-            "tools": agent.tools,
-            "permissions": agent.permissions,
-            "memory": agent.memory,
-            "execution_limits": agent.execution_limits,
-            "timeout": agent.timeout_seconds,
-            "retry_policy": agent.retry_policy,
-        }
-        try:
+    # ---------------------------------------------------------
+    # 1. Read execution + agent and mark execution as RUNNING
+    # ---------------------------------------------------------
+        async with AsyncSessionLocal() as db:
+            execution = await db.get(Execution, execution_id)
+
+            if not execution:
+                return
+
+            agent = await db.get(Agent, execution.agent_id)
+
+            if not agent:
+                execution.status = ExecutionStatus.FAILED
+                execution.error = "Agent not found"
+                execution.completed_at = datetime.utcnow()
+                await db.commit()
+                return
+
+            config = {
+                "name": agent.name,
+                "type": agent.agent_type,
+                "system_prompt": agent.system_prompt,
+                "model": agent.model,
+                "temperature": agent.temperature,
+                "max_tokens": agent.max_tokens,
+                "tools": agent.tools,
+                "permissions": agent.permissions,
+                "memory": agent.memory,
+                "execution_limits": agent.execution_limits,
+                "timeout": agent.timeout_seconds,
+                "retry_policy": agent.retry_policy,
+            }
+
+            input_data = execution.input
+
             execution.status = ExecutionStatus.RUNNING
             execution.started_at = datetime.utcnow()
-            await db.commit()
-            await ws_manager.broadcast(str(execution.id), {"status": "running"})
 
-            # Call agent service
+            await db.commit()
+
+            execution_id_str = str(execution.id)
+
+        await ws_manager.broadcast(
+            execution_id_str,
+            {"status": "running"},
+        )
+
+    # ---------------------------------------------------------
+    # 2. Call AGENTS WITHOUT holding a DB session
+    # ---------------------------------------------------------
+        try:
             client = AgentsClient()
-            result = await client.execute(config, execution.input)
 
-            execution.status = ExecutionStatus.COMPLETED
-            execution.output = result
-            execution.completed_at = datetime.utcnow()
-            await db.commit()
-            await ws_manager.broadcast(str(execution.id), {"status": "completed", "output": result})
+            agents_agent_id = f"{agent.agent_type}_agent"
+
+            result = await client.execute(
+                agents_agent_id,
+                input_data,
+            )
+
         except Exception as e:
-            execution.status = ExecutionStatus.FAILED
-            execution.error = str(e)
-            execution.completed_at = datetime.utcnow()
-            await db.commit()
-            await ws_manager.broadcast(str(execution.id), {"status": "failed", "error": str(e)})
+        # -----------------------------------------------------
+        # 3. Open a NEW DB session to save failure
+        # -----------------------------------------------------
+            async with AsyncSessionLocal() as db:
+                execution = await db.get(Execution, execution_id)
+
+                if execution:
+                    execution.status = ExecutionStatus.FAILED
+                    execution.error = str(e)
+                    execution.completed_at = datetime.utcnow()
+                    await db.commit()
+
+            await ws_manager.broadcast(
+                execution_id_str,
+                {
+                    "status": "failed",
+                    "error": str(e),
+                },
+            )
+            return
+
+    # ---------------------------------------------------------
+    # 4. Open a NEW DB session to save success
+    # ---------------------------------------------------------
+        async with AsyncSessionLocal() as db:
+            execution = await db.get(Execution, execution_id)
+
+            if execution:
+                execution.status = ExecutionStatus.COMPLETED
+                execution.output = result
+                execution.completed_at = datetime.utcnow()
+
+                await db.commit()
+
+        await ws_manager.broadcast(
+            execution_id_str,
+            {
+                "status": "completed",
+                "output": result,
+            },
+        )

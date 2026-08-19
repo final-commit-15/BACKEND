@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: str = '["http://localhost:3000","http://localhost:8000"]'
 
-    AGENTS_SERVICE_URL: str = "http://agentforge-agents:8000"
+    AGENTS_SERVICE_URL: str = "http://host.docker.internal:8001"
     AI_SERVICES_URL: str = "http://agentforge-ai-services:8000"
     INTEGRATIONS_SERVICE_URL: str = "http://agentforge-integrations:8000"
 

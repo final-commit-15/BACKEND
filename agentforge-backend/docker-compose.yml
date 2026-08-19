@@ -78,6 +78,12 @@ services:
     networks:
       - default
       - agentforge-network
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A agentforge_backend.workers.celery_app inspect ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
 networks:
