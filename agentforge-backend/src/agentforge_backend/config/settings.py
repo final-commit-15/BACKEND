@@ -2,6 +2,7 @@ from pydantic_settings import BaseSettings
 from typing import List
 import json
 
+
 class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
@@ -9,11 +10,16 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://backend:backendpass@localhost:5432/agentforge"
     REDIS_URL: str = "redis://localhost:6379/0"
 
+    # JWT settings – use these consistently
     JWT_SECRET: str = "change_this_in_production"
+    JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    CORS_ORIGINS: str = '["http://localhost:3000","http://localhost:8000"]'
+   
+    # We'll use the JWT_* versions instead.
+
+    CORS_ORIGINS: str = '["http://localhost:3000","http://localhost:8000","http://localhost:5173","http://127.0.0.1:5173"]'  # fixed
 
     AGENTS_SERVICE_URL: str = "http://host.docker.internal:8001"
     AI_SERVICES_URL: str = "http://agentforge-ai-services:8000"
@@ -27,6 +33,9 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://redis:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://redis:6379/2"
 
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
     @property
     def cors_origins_list(self) -> List[str]:
         return json.loads(self.CORS_ORIGINS)
@@ -34,5 +43,6 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
+
 
 settings = Settings()

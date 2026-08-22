@@ -7,7 +7,7 @@ from ...middleware.auth import get_current_user_id
 from ...schemas.task import TaskCreate, TaskOut, TaskUpdate, TaskStatus
 from ...utils.exceptions import NotFoundError
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
+router = APIRouter(tags=["tasks"])
 
 @router.post("/", response_model=TaskOut, status_code=status.HTTP_201_CREATED)
 async def create_task(

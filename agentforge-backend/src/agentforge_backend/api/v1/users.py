@@ -7,7 +7,7 @@ from ...middleware.auth import get_current_user_id
 from ...schemas.user import UserOut, UserUpdate
 from ...utils.exceptions import NotFoundError
 
-router = APIRouter(prefix="/users", tags=["users"])
+router = APIRouter(tags=["users"])
 
 @router.get("/me", response_model=UserOut)
 async def get_me(current_user_id: str = Depends(get_current_user_id), db: AsyncSession = Depends(get_db)):

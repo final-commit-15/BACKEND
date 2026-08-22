@@ -15,6 +15,9 @@ from ..utils.exceptions import NotFoundError, PermissionDeniedError
 from uuid import uuid4
 import asyncio
 from datetime import datetime
+from sqlalchemy import select
+from ..models.task import Task
+
 
 class ExecutionService:
     @staticmethod
@@ -52,6 +55,18 @@ class ExecutionService:
         run_execution_task.delay(str(execution.id))
         await ws_manager.broadcast(str(execution.id), {"status": "queued"})
         return execution
+
+    @staticmethod
+    async def list_by_user(db: AsyncSession, user_id: str, limit: int = 10):
+        result = await db.execute(
+            select(Execution)
+            .join(Task, Execution.task_id == Task.id)
+            .where(Task.assignee_id == user_id)
+            .order_by(Execution.created_at.desc())
+            .limit(limit)
+        )
+
+        return result.scalars().all()
 
     @staticmethod
     async def get_by_id(db: AsyncSession, execution_id: str) -> Execution | None:

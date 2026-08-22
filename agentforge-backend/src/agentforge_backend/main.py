@@ -4,151 +4,64 @@ from contextlib import asynccontextmanager
 
 import asyncpg
 import redis.asyncio as redis
-from fastapi import FastAPI, status
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config.settings import settings
 from .utils.logging import setup_logging
+from .api.v1 import router as api_router
+from .db.redis import get_redis_client, close_redis_client
 
-# ----- Import all API routers (v1) -----
-from .api.v1 import (
-    auth,
-    users,
-    agents,
-    tasks,
-    executions,
-    workspaces,
-    projects,
-)
+# Expose redis client for deps
+redis_client = None
 
-# Setup logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Global state for dependency checks (used in readiness)
-db_conn = None
-redis_client = None
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for startup/shutdown."""
-    global db_conn, redis_client
-
+    global redis_client
+    # Database connection is handled per request via dependency
     try:
-        dsn = settings.DATABASE_URL.replace(
-            "postgresql+asyncpg://",
-            "postgresql://",
-            1,
-        )
-        db_conn = await asyncpg.connect(dsn)
-        logger.info("Database connection established.")
-    except Exception as e:
-        logger.error(f"Failed to connect to database: {e}")
-
-    try:
-        redis_client = redis.from_url(
-            settings.REDIS_URL,
-            decode_responses=True,
-        )
-        await redis_client.ping()
+        redis_client = await get_redis_client()
         logger.info("Redis connection established.")
     except Exception as e:
         logger.error(f"Failed to connect to Redis: {e}")
-
     yield
+    # Cleanup
+    await close_redis_client()
+    logger.info("Redis connection closed.")
 
-    if db_conn:
-        await db_conn.close()
-        logger.info("Database connection closed.")
+app = FastAPI(title="AgentForge Backend", version="0.1.0", lifespan=lifespan)
 
-    if redis_client:
-        await redis_client.close()
-        logger.info("Redis connection closed.")
+origins = [
+    "http://localhost:5173",   # Vite
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",   # Optional React
+]
 
-
-# ----- Create FastAPI app -----
-app = FastAPI(
-    title="AgentForge Backend",
-    version="0.1.0",
-    lifespan=lifespan,
-)
-
-# ----- CORS middleware -----
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ----- Include all v1 routers -----
-app.include_router(auth.router, prefix="/api/v1")
-app.include_router(users.router, prefix="/api/v1")
-app.include_router(agents.router, prefix="/api/v1")
-app.include_router(tasks.router, prefix="/api/v1")
-app.include_router(executions.router, prefix="/api/v1")
-app.include_router(workspaces.router, prefix="/api/v1")
-app.include_router(projects.router, prefix="/api/v1")
+app.include_router(api_router, prefix="/api/v1")
 
-# ----- Health endpoints -----
-@app.get("/health", status_code=status.HTTP_200_OK)
-async def health():
-    """Basic application health."""
+@app.get("/health")
+async def root_health():
     return {"status": "ok"}
 
-
-@app.get("/health/live", status_code=status.HTTP_200_OK)
-async def liveness():
-    """Liveness probe – process is alive."""
+@app.get("/health/live")
+async def root_liveness():
     return {"status": "alive"}
 
-
 @app.get("/health/ready")
-async def readiness():
-    """Readiness probe – checks DB and Redis."""
-    checks = {
-        "database": False,
-        "redis": False,
-    }
+async def root_readiness():
+    return {"status": "ready"}
 
-    overall = True
-
-    try:
-        if db_conn is None:
-            raise RuntimeError("Database connection is not available")
-
-        await db_conn.fetchrow("SELECT 1")
-        checks["database"] = True
-    except Exception:
-        overall = False
-
-    try:
-        if redis_client is None:
-            raise RuntimeError("Redis connection is not available")
-
-        await redis_client.ping()
-        checks["redis"] = True
-    except Exception:
-        overall = False
-
-    if not overall:
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "status": "unhealthy",
-                "checks": checks,
-            },
-        )
-
-    return {
-        "status": "ready",
-        "checks": checks,
-    }
-
-# ----- Optional root endpoint -----
 @app.get("/")
 async def root():
     return {"message": "AgentForge Backend is running."}

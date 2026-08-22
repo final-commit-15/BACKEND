@@ -7,7 +7,7 @@ from ...schemas.execution import ExecutionStart, ExecutionOut
 from ...websocket.manager import ws_manager
 from ...utils.exceptions import NotFoundError, PermissionDeniedError
 
-router = APIRouter(prefix="/executions", tags=["executions"])
+router = APIRouter(tags=["executions"])
 
 @router.post("/", response_model=ExecutionOut)
 async def start_execution(
@@ -33,6 +33,20 @@ async def start_execution(
             status_code=403,
             detail=str(e)
         )
+
+from typing import Optional
+
+@router.get("/", response_model=list[ExecutionOut])
+async def list_executions(
+    limit: int = 10,
+    current_user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    return await ExecutionService.list_by_user(
+        db=db,
+        user_id=current_user_id,
+        limit=limit,
+    )
 
 @router.get("/{execution_id}", response_model=ExecutionOut)
 async def get_execution(execution_id: str, db: AsyncSession = Depends(get_db)):

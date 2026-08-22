@@ -7,7 +7,7 @@ from ...middleware.auth import get_current_user_id
 from ...schemas.agent import AgentCreate, AgentOut, AgentUpdate
 from ...utils.exceptions import NotFoundError, PermissionDeniedError
 
-router = APIRouter(prefix="/agents", tags=["agents"])
+router = APIRouter(tags=["agents"])
 
 @router.post("/", response_model=AgentOut, status_code=status.HTTP_201_CREATED)
 async def create_agent(

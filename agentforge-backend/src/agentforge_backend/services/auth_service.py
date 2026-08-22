@@ -9,9 +9,16 @@ from ..utils.exceptions import AuthenticationError, ConflictError
 class AuthService:
     @staticmethod
     async def register(db: AsyncSession, user_data: UserCreate) -> User:
-        existing = await db.execute(select(User).where(User.email == user_data.email))
-        if existing.scalar_one_or_none():
+        # Check email
+        existing_email = await db.execute(select(User).where(User.email == user_data.email))
+        if existing_email.scalar_one_or_none():
             raise ConflictError("Email already registered")
+
+        # Check username (critical fix)
+        existing_username = await db.execute(select(User).where(User.username == user_data.username))
+        if existing_username.scalar_one_or_none():
+            raise ConflictError("Username already taken")
+
         hashed = hash_password(user_data.password)
         user = User(
             email=user_data.email,
@@ -43,7 +50,6 @@ class AuthService:
         if not payload:
             raise AuthenticationError("Invalid token")
         user_id = payload.get("sub")
-        # optionally verify user still exists and is active
         user = await db.get(User, user_id)
         if not user or not user.is_active:
             raise AuthenticationError("User not found or inactive")
