@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     JWT_REFRESH_TOKEN_ROTATION: bool = True
 
+    # Legacy settings (for backward compatibility)
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
     CORS_ORIGINS: str = '["http://localhost:3000","http://localhost:8000","http://localhost:5173","http://127.0.0.1:5173"]'
     CORS_ALLOW_CREDENTIALS: bool = True
     CORS_ALLOW_METHODS: str = '["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]'

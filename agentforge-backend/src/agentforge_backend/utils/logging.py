@@ -32,7 +32,6 @@ def setup_logging() -> None:
         structlog.contextvars.merge_contextvars,
         add_log_level,
         add_timestamp,
-        structlog.processors.add_logger_name,
         mask_sensitive_data,
         structlog.processors.format_exc_info,
     ]

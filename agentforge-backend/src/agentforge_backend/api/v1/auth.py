@@ -15,6 +15,9 @@ from ...schemas.auth import (
 from ...utils.exceptions import AuthenticationError, ConflictError
 from ...middleware.rate_limiter import limiter
 from ...utils.logging import get_logger
+from ..deps import get_current_user
+from ...models.user import User
+from ...middleware.auth import get_current_user_id
 
 router = APIRouter()
 logger = get_logger("auth")
@@ -103,9 +106,3 @@ async def logout(
 async def me(current_user: User = Depends(get_current_user)):
     """Get current user profile."""
     return current_user
-
-
-# Import at bottom to avoid circular imports
-from ..deps import get_current_user
-from ...models.user import User
-from ...middleware.auth import get_current_user_id
