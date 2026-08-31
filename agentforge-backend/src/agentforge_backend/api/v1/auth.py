@@ -1,182 +1,111 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
-from jose import jwt
-from passlib.context import CryptContext
-import uuid
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from typing import Optional
+
 from ...db.session import get_db
-
-
-from ...models.user import User
-from ...config.settings import settings
-from ..deps import get_current_user
+from ...services.auth_service import AuthService
 from ...schemas.auth import (
     UserCreate,
     UserResponse,
     LoginRequest,
     TokenResponse,
     RefreshRequest,
+    LogoutRequest,
 )
+from ...utils.exceptions import AuthenticationError, ConflictError
+from ...middleware.rate_limiter import limiter
+from ...utils.logging import get_logger
 
 router = APIRouter()
-
-# ----- Security setup -----
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+logger = get_logger("auth")
 
 
-
-# ----- In‑memory user store (placeholder) -----
-_users_db: Dict[str, Dict[str, Any]] = {}
-
-class UserService:
-    async def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
-        return _users_db.get(email)
-
-    async def create_user(self, email: str, hashed_password: str, full_name: Optional[str] = None) -> Dict[str, Any]:
-        user = {
-            "id": str(uuid.uuid4()),
-            "email": email,
-            "hashed_password": hashed_password,
-            "full_name": full_name,
-        }
-        _users_db[email] = user
-        return user
-
-# ----- Helper functions -----
-def verify_password(plain: str, hashed: str) -> bool:
-    return pwd_context.verify(plain, hashed)
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
-
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
-
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM,)
-
-def create_refresh_token(data: dict):
-    expire = datetime.utcnow() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
-
-    payload = data.copy()
-    payload.update({"exp": expire})
-
-    return jwt.encode(
-        payload,
-        settings.JWT_SECRET,
-        algorithm=settings.JWT_ALGORITHM,
-    )
-
-# ----- Endpoints -----
 @router.post("/register", response_model=UserResponse, status_code=201)
+@limiter.limit("3/minute")
 async def register(
+    request: Request,
     user: UserCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(User).where(User.email == user.email)
-    )
-    existing = result.scalar_one_or_none()
+    """Register a new user."""
+    try:
+        db_user = await AuthService.register(db, user)
+        return db_user
+    except ConflictError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("registration_failed", error=str(e), email=user.email)
+        raise HTTPException(status_code=500, detail="Registration failed")
 
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail="Email already registered",
-        )
-
-    db_user = User(
-        email=user.email,
-        username=user.username,
-        full_name=user.full_name,
-        hashed_password=get_password_hash(user.password),
-        is_active=True,
-        is_verified=False,
-        role="USER",
-    )
-
-    db.add(db_user)
-    await db.commit()
-    await db.refresh(db_user)
-
-    return db_user
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit("5/minute")
 async def login(
+    request: Request,
     login_data: LoginRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(User).where(User.email == login_data.email)
-    )
-    user = result.scalar_one_or_none()
+    """Login user and return access and refresh tokens."""
+    try:
+        ip = request.client.host if request.client else None
+        tokens = await AuthService.login(db, login_data.email, login_data.password, ip)
+        return tokens
+    except AuthenticationError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        logger.error("login_failed", error=str(e), email=login_data.email)
+        raise HTTPException(status_code=500, detail="Login failed")
 
-    if user is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Incorrect email or password",
-        )
-
-    if not verify_password(
-        login_data.password,
-        user.hashed_password,
-    ):
-        raise HTTPException(
-            status_code=401,
-            detail="Incorrect email or password",
-        )
-
-    access_token = create_access_token({"sub": str(user.id)})
-    refresh_token = create_refresh_token({"sub": str(user.id)})
-
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer",
-    }
-
-from jose import JWTError
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh_token(refresh_data: RefreshRequest):
+@limiter.limit("10/minute")
+async def refresh_token(
+    request: Request,
+    refresh_data: RefreshRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Refresh access token using refresh token."""
     try:
-        payload = jwt.decode(
-            refresh_data.refresh_token,
-            settings.JWT_SECRET,
-            algorithms=[settings.JWT_ALGORITHM],
+        ip = request.client.host if request.client else None
+        tokens = await AuthService.refresh_token(db, refresh_data.refresh_token, ip)
+        return tokens
+    except AuthenticationError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        logger.error("token_refresh_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Token refresh failed")
+
+
+@router.post("/logout", status_code=204)
+async def logout(
+    request: Request,
+    logout_data: LogoutRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user_id: str = Depends(get_current_user_id),
+):
+    """Logout user and optionally revoke all tokens."""
+    try:
+        ip = request.client.host if request.client else None
+        await AuthService.logout(
+            db,
+            current_user_id,
+            access_token=logout_data.access_token,
+            refresh_token=logout_data.refresh_token,
+            revoke_all=logout_data.revoke_all,
+            ip_address=ip,
         )
+    except Exception as e:
+        logger.error("logout_failed", error=str(e), user_id=current_user_id)
+        raise HTTPException(status_code=500, detail="Logout failed")
 
-        user_id = payload.get("sub")
-
-        if user_id is None:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid refresh token"
-            )
-
-        access_token = create_access_token({"sub": user_id})
-        refresh_token = create_refresh_token({"sub": user_id})
-
-        return {
-            "access_token": access_token,
-            "refresh_token": refresh_token,
-            "token_type": "bearer",
-        }
-
-    except JWTError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired refresh token"
-        )
 
 @router.get("/me", response_model=UserResponse)
 async def me(current_user: User = Depends(get_current_user)):
+    """Get current user profile."""
     return current_user
+
+
+# Import at bottom to avoid circular imports
+from ..deps import get_current_user
+from ...models.user import User
+from ...middleware.auth import get_current_user_id

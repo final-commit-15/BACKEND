@@ -1,15 +1,17 @@
-from typing import AsyncGenerator, Annotated
+from typing import AsyncGenerator
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from ..config.settings import settings
-from ..db.session import async_session   # now exists
+from ..db.session import async_session
 from ..db.redis import get_redis_client
 from ..models.user import User
+from ..security.jwt import decode_token, is_token_blacklisted, is_user_revoked
 from uuid import UUID
-from sqlalchemy import select
+from ..utils.exceptions import AuthenticationError
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -34,20 +36,29 @@ async def get_current_user(
     )
 
     try:
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET,
-            algorithms=[settings.JWT_ALGORITHM],
-        )
-
+        payload = decode_token(token)
+        if not payload:
+            raise credentials_exception
+        
+        # Check if token is blacklisted
+        if await is_token_blacklisted(token, "access"):
+            raise AuthenticationError("Token has been revoked")
+        
+        # Check token type
+        if payload.get("type") != "access":
+            raise credentials_exception
+        
         user_id = payload.get("sub")
-
         if user_id is None:
             raise credentials_exception
 
+        # Check if user tokens were revoked
+        if await is_user_revoked(user_id):
+            raise AuthenticationError("User tokens have been revoked")
+
         user_id = UUID(user_id)
 
-    except (JWTError, ValueError):
+    except (JWTError, ValueError, AuthenticationError):
         raise credentials_exception
 
     result = await db.execute(
@@ -59,9 +70,24 @@ async def get_current_user(
     if user is None:
         raise credentials_exception
 
+    if not user.is_active:
+        raise AuthenticationError("Account disabled")
+
     return user
 
-# Permission check placeholder
-async def require_permission(user: User, permission: str):
-    # Implement RBAC logic
-    pass
+# Optional user dependency (for endpoints that work with or without auth)
+async def get_current_user_optional(
+    token: str = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    try:
+        return await get_current_user(token, db)
+    except HTTPException:
+        return None
+
+# Permission check
+async def require_permission(user: User, permission: str) -> bool:
+    """Check if user has a specific permission."""
+    from ..security.permissions import user_has_permission
+    from ..models.user import UserRole
+    return user_has_permission(user.role, permission)

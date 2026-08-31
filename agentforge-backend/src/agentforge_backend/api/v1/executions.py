@@ -57,7 +57,19 @@ async def get_execution(execution_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.websocket("/ws/{execution_id}")
 async def websocket_endpoint(websocket: WebSocket, execution_id: str):
-    await ws_manager.connect(execution_id, websocket)
+    # Authenticate the WebSocket connection
+    user_info = await ws_manager.authenticate_websocket(websocket)
+    if not user_info:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    
+    # Authorize access to this execution
+    authorized = await ws_manager.authorize_execution_access(user_info["user_id"], execution_id)
+    if not authorized:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    
+    await ws_manager.connect(execution_id, websocket, user_info)
     try:
         while True:
             await websocket.receive_text()  # keep alive

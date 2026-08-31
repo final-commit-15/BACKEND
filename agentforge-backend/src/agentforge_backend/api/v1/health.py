@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel
 from typing import Literal
 from sqlalchemy import text
@@ -6,6 +6,7 @@ from redis.asyncio import Redis
 
 from ..deps import get_db, get_redis
 from ...config.settings import settings
+from ...monitoring.metrics import get_metrics
 
 router = APIRouter()
 
@@ -66,3 +67,10 @@ async def readiness(db=Depends(get_db), redis: Redis = Depends(get_redis)):
     if not (db_ok and redis_ok):
         return {"status": "not ready", "database": db_ok, "redis": redis_ok}, 503
     return {"status": "ready"}
+
+@router.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    if not settings.METRICS_ENABLED:
+        return Response(content="Metrics disabled", status_code=404)
+    return get_metrics()
