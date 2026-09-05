@@ -1,26 +1,23 @@
-from xmlrpc import client
-
-from agentforge_backend import db
-from ..models.task import Task
-from agentforge_backend.db.session import AsyncSessionLocal
-from agentforge_backend.schemas import agent, task
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from ..models.execution import Execution, ExecutionStatus
 from ..models.execution_log import ExecutionLog, LogSeverity
 from ..models.agent import Agent
+from ..models.task import Task
 from ..clients.agents import AgentsClient
 from ..websocket.manager import ws_manager
 from ..utils.exceptions import NotFoundError, PermissionDeniedError
 from uuid import uuid4
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
+from ..db.session import AsyncSessionLocal
+
 
 class ExecutionService:
     @staticmethod
     async def start(db: AsyncSession, agent_id: str, task_id: str | None, input_data: dict, user_id: str) -> Execution:
-       
-     # verify agent exists and belongs to user (or user has access)
+        
+        # verify agent exists and belongs to user (or user has access)
         agent = await db.get(Agent, agent_id)
         if not agent:
             raise NotFoundError("Agent not found")
@@ -54,13 +51,23 @@ class ExecutionService:
         return execution
 
     @staticmethod
+    async def list_by_user(db: AsyncSession, user_id: str, limit: int = 10):
+        result = await db.execute(
+            select(Execution)
+            .join(Task, Execution.task_id == Task.id)
+            .where(Task.assignee_id == user_id)
+            .order_by(Execution.created_at.desc())
+            .limit(limit)
+        )
+
+        return result.scalars().all()
+
+    @staticmethod
     async def get_by_id(db: AsyncSession, execution_id: str) -> Execution | None:
         return await db.get(Execution, execution_id)
 
     @staticmethod
     async def _run(execution_id: str):
-        from ..db.session import AsyncSessionLocal
-
     # ---------------------------------------------------------
     # 1. Read execution + agent and mark execution as RUNNING
     # ---------------------------------------------------------
@@ -75,7 +82,7 @@ class ExecutionService:
             if not agent:
                 execution.status = ExecutionStatus.FAILED
                 execution.error = "Agent not found"
-                execution.completed_at = datetime.utcnow()
+                execution.completed_at = datetime.now(timezone.utc)
                 await db.commit()
                 return
 
@@ -97,7 +104,7 @@ class ExecutionService:
             input_data = execution.input
 
             execution.status = ExecutionStatus.RUNNING
-            execution.started_at = datetime.utcnow()
+            execution.started_at = datetime.now(timezone.utc)
 
             await db.commit()
 
@@ -131,7 +138,7 @@ class ExecutionService:
                 if execution:
                     execution.status = ExecutionStatus.FAILED
                     execution.error = str(e)
-                    execution.completed_at = datetime.utcnow()
+                    execution.completed_at = datetime.now(timezone.utc)
                     await db.commit()
 
             await ws_manager.broadcast(
@@ -152,7 +159,7 @@ class ExecutionService:
             if execution:
                 execution.status = ExecutionStatus.COMPLETED
                 execution.output = result
-                execution.completed_at = datetime.utcnow()
+                execution.completed_at = datetime.now(timezone.utc)
 
                 await db.commit()
 

@@ -6,7 +6,7 @@ from ...services.webhook_service import WebhookService
 from ...middleware.auth import get_current_user_id
 from ...schemas.webhook import WebhookCreate, WebhookOut
 
-router = APIRouter(prefix="/webhooks", tags=["webhooks"])
+router = APIRouter(tags=["webhooks"])
 
 @router.post("/", response_model=WebhookOut, status_code=status.HTTP_201_CREATED)
 async def create_webhook(

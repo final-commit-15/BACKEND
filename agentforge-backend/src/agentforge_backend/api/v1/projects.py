@@ -7,7 +7,7 @@ from ...middleware.auth import get_current_user_id
 from ...schemas.project import ProjectCreate, ProjectOut
 from ...utils.exceptions import NotFoundError
 
-router = APIRouter(prefix="/projects", tags=["projects"])
+router = APIRouter(tags=["projects"])
 
 @router.post("/", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
 async def create_project(

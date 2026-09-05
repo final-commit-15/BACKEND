@@ -6,7 +6,7 @@ from ...services.integration_service import IntegrationService
 from ...middleware.auth import get_current_user_id
 from ...schemas.integration import IntegrationCreate, IntegrationOut
 
-router = APIRouter(prefix="/integrations", tags=["integrations"])
+router = APIRouter(tags=["integrations"])
 
 @router.post("/", response_model=IntegrationOut, status_code=status.HTTP_201_CREATED)
 async def connect_integration(

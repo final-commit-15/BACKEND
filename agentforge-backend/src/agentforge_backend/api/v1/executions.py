@@ -7,7 +7,7 @@ from ...schemas.execution import ExecutionStart, ExecutionOut
 from ...websocket.manager import ws_manager
 from ...utils.exceptions import NotFoundError, PermissionDeniedError
 
-router = APIRouter(prefix="/executions", tags=["executions"])
+router = APIRouter(tags=["executions"])
 
 @router.post("/", response_model=ExecutionOut)
 async def start_execution(
@@ -34,6 +34,20 @@ async def start_execution(
             detail=str(e)
         )
 
+from typing import Optional
+
+@router.get("/", response_model=list[ExecutionOut])
+async def list_executions(
+    limit: int = 10,
+    current_user_id: str = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    return await ExecutionService.list_by_user(
+        db=db,
+        user_id=current_user_id,
+        limit=limit,
+    )
+
 @router.get("/{execution_id}", response_model=ExecutionOut)
 async def get_execution(execution_id: str, db: AsyncSession = Depends(get_db)):
     exec = await ExecutionService.get_by_id(db, execution_id)
@@ -43,7 +57,19 @@ async def get_execution(execution_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.websocket("/ws/{execution_id}")
 async def websocket_endpoint(websocket: WebSocket, execution_id: str):
-    await ws_manager.connect(execution_id, websocket)
+    # Authenticate the WebSocket connection
+    user_info = await ws_manager.authenticate_websocket(websocket)
+    if not user_info:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    
+    # Authorize access to this execution
+    authorized = await ws_manager.authorize_execution_access(user_info["user_id"], execution_id)
+    if not authorized:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    
+    await ws_manager.connect(execution_id, websocket, user_info)
     try:
         while True:
             await websocket.receive_text()  # keep alive

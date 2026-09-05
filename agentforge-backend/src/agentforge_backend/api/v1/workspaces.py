@@ -7,7 +7,7 @@ from ...middleware.auth import get_current_user_id
 from ...schemas.workspace import WorkspaceCreate, WorkspaceOut, WorkspaceMemberAdd
 from ...utils.exceptions import NotFoundError, PermissionDeniedError
 
-router = APIRouter(prefix="/workspaces", tags=["workspaces"])
+router = APIRouter(tags=["workspaces"])
 
 @router.post("/", response_model=WorkspaceOut, status_code=status.HTTP_201_CREATED)
 async def create_workspace(

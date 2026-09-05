@@ -6,7 +6,7 @@ from ...services.notification_service import NotificationService
 from ...middleware.auth import get_current_user_id
 from ...schemas.notification import NotificationOut
 
-router = APIRouter(prefix="/notifications", tags=["notifications"])
+router = APIRouter(tags=["notifications"])
 
 @router.get("/", response_model=List[NotificationOut])
 async def list_notifications(

@@ -1,154 +1,123 @@
 import asyncio
 import logging
+import os
+import subprocess
+import sys
 from contextlib import asynccontextmanager
 
-import asyncpg
-import redis.asyncio as redis
-from fastapi import FastAPI, status
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .config.settings import settings
 from .utils.logging import setup_logging
+from .api.v1 import router as api_router
+from .db.redis import get_redis_client, close_redis_client
+from .middleware.rate_limiter import limiter, rate_limit_exceeded_handler, add_rate_limiter_middleware
+from .middleware.security_headers import add_security_headers_middleware
+from .middleware.request_logging import add_request_logging_middleware
 
-# ----- Import all API routers (v1) -----
-from .api.v1 import (
-    auth,
-    users,
-    agents,
-    tasks,
-    executions,
-    workspaces,
-    projects,
-)
+# Expose redis client for deps
+redis_client = None
 
-# Setup logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Global state for dependency checks (used in readiness)
-db_conn = None
-redis_client = None
+
+async def run_migrations():
+    """Run database migrations on startup."""
+    try:
+        logger.info("Running database migrations...")
+        # Set ALEMBIC_DOCKER=1 so alembic knows to use Docker service names
+        env = os.environ.copy()
+        env["ALEMBIC_DOCKER"] = "1"
+        
+        # Run alembic upgrade head
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            capture_output=True,
+            text=True,
+            cwd="/app",
+            timeout=60,
+            env=env
+        )
+        if result.returncode == 0:
+            logger.info("Database migrations completed successfully")
+        else:
+            logger.error(f"Migration failed: {result.stderr}")
+            raise RuntimeError(f"Database migration failed: {result.stderr}")
+    except subprocess.TimeoutExpired:
+        logger.error("Migration timed out")
+        raise
+    except Exception as e:
+        logger.error(f"Migration error: {e}")
+        raise
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for startup/shutdown."""
-    global db_conn, redis_client
-
+    global redis_client
+    # Run migrations first
+    await run_migrations()
+    
+    # Then connect to Redis
     try:
-        dsn = settings.DATABASE_URL.replace(
-            "postgresql+asyncpg://",
-            "postgresql://",
-            1,
-        )
-        db_conn = await asyncpg.connect(dsn)
-        logger.info("Database connection established.")
-    except Exception as e:
-        logger.error(f"Failed to connect to database: {e}")
-
-    try:
-        redis_client = redis.from_url(
-            settings.REDIS_URL,
-            decode_responses=True,
-        )
-        await redis_client.ping()
-        logger.info("Redis connection established.")
+        redis_client = await get_redis_client()
+        if redis_client:
+            logger.info("Redis connection established.")
+        else:
+            logger.warning("Redis not available, using fallback storage.")
     except Exception as e:
         logger.error(f"Failed to connect to Redis: {e}")
-
     yield
-
-    if db_conn:
-        await db_conn.close()
-        logger.info("Database connection closed.")
-
-    if redis_client:
-        await redis_client.close()
-        logger.info("Redis connection closed.")
+    await close_redis_client()
+    logger.info("Redis connection closed.")
 
 
-# ----- Create FastAPI app -----
 app = FastAPI(
     title="AgentForge Backend",
-    version="0.1.0",
+    version=settings.APP_VERSION,
     lifespan=lifespan,
+    docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
+    redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
 )
 
-# ----- CORS middleware -----
+# CORS - use settings
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
+    allow_methods=settings.cors_allow_methods_list,
+    allow_headers=settings.cors_allow_headers_list,
+    expose_headers=settings.CORS_EXPOSE_HEADERS,
+    max_age=settings.CORS_MAX_AGE,
 )
 
-# ----- Include all v1 routers -----
-app.include_router(auth.router, prefix="/api/v1")
-app.include_router(users.router, prefix="/api/v1")
-app.include_router(agents.router, prefix="/api/v1")
-app.include_router(tasks.router, prefix="/api/v1")
-app.include_router(executions.router, prefix="/api/v1")
-app.include_router(workspaces.router, prefix="/api/v1")
-app.include_router(projects.router, prefix="/api/v1")
+# Security headers
+add_security_headers_middleware(app)
 
-# ----- Health endpoints -----
-@app.get("/health", status_code=status.HTTP_200_OK)
-async def health():
-    """Basic application health."""
+# Request logging
+add_request_logging_middleware(app)
+
+# Rate limiting (must be after CORS to properly handle preflight)
+add_rate_limiter_middleware(app)
+app.state.limiter = limiter
+app.add_exception_handler(429, rate_limit_exceeded_handler)
+
+app.include_router(api_router, prefix="/api/v1")
+
+@app.get("/health")
+async def root_health():
     return {"status": "ok"}
 
-
-@app.get("/health/live", status_code=status.HTTP_200_OK)
-async def liveness():
-    """Liveness probe – process is alive."""
+@app.get("/health/live")
+async def root_liveness():
     return {"status": "alive"}
 
-
 @app.get("/health/ready")
-async def readiness():
-    """Readiness probe – checks DB and Redis."""
-    checks = {
-        "database": False,
-        "redis": False,
-    }
+async def root_readiness():
+    return {"status": "ready"}
 
-    overall = True
-
-    try:
-        if db_conn is None:
-            raise RuntimeError("Database connection is not available")
-
-        await db_conn.fetchrow("SELECT 1")
-        checks["database"] = True
-    except Exception:
-        overall = False
-
-    try:
-        if redis_client is None:
-            raise RuntimeError("Redis connection is not available")
-
-        await redis_client.ping()
-        checks["redis"] = True
-    except Exception:
-        overall = False
-
-    if not overall:
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "status": "unhealthy",
-                "checks": checks,
-            },
-        )
-
-    return {
-        "status": "ready",
-        "checks": checks,
-    }
-
-# ----- Optional root endpoint -----
 @app.get("/")
 async def root():
     return {"message": "AgentForge Backend is running."}
