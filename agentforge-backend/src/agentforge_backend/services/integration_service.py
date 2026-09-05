@@ -6,9 +6,17 @@ from ..utils.exceptions import NotFoundError, PermissionDeniedError
 from cryptography.fernet import Fernet
 from ..config.settings import settings
 import json
+import base64
 
-# In production, use a fixed key from env; for demo, derive from JWT_SECRET
-cipher = Fernet(Fernet.generate_key())  # TODO: store securely
+# Use a fixed key derived from JWT_SECRET for consistent encryption across restarts
+# In production, this should be a separate env variable
+def _get_cipher_key() -> bytes:
+    # Derive a 32-byte key from JWT_SECRET using SHA256
+    import hashlib
+    key = hashlib.sha256(settings.JWT_SECRET.encode()).digest()
+    return base64.urlsafe_b64encode(key)
+
+cipher = Fernet(_get_cipher_key())
 
 class IntegrationService:
     @staticmethod

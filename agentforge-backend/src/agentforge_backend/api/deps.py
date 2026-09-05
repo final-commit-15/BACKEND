@@ -4,6 +4,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, DisconnectionError
 
 from ..config.settings import settings
 from ..db.session import async_session
@@ -17,8 +18,13 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 # DB session dependency
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with async_session() as session:
-        yield session
+    try:
+        async with async_session() as session:
+            yield session
+    except (OperationalError, DisconnectionError) as e:
+        raise HTTPException(status_code=503, detail="Database temporarily unavailable") from e
+    except SQLAlchemyError as e:
+        raise HTTPException(status_code=503, detail="Database error") from e
 
 # Redis dependency
 async def get_redis():

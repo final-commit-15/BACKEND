@@ -56,6 +56,8 @@ async def blacklist_token(token: str, token_type: str = "access") -> bool:
     """Add a token to the blacklist."""
     try:
         redis = await get_redis_client()
+        if redis is None:
+            return False
         payload = decode_token(token)
         if not payload:
             return False
@@ -79,6 +81,8 @@ async def is_token_blacklisted(token: str, token_type: str = "access") -> bool:
     """Check if a token is blacklisted."""
     try:
         redis = await get_redis_client()
+        if redis is None:
+            return False
         payload = decode_token(token)
         if not payload:
             return True
@@ -121,6 +125,8 @@ async def revoke_all_user_tokens(user_id: str) -> int:
     """Revoke all tokens for a user (logout from all devices)."""
     try:
         redis = await get_redis_client()
+        if redis is None:
+            return 0
         # This is a simplified approach - in production, you'd track user tokens
         # For now, we'll use a user revocation key
         key = f"user_revoked:{user_id}"
@@ -134,6 +140,8 @@ async def is_user_revoked(user_id: str) -> bool:
     """Check if a user's tokens have been revoked."""
     try:
         redis = await get_redis_client()
+        if redis is None:
+            return False
         key = f"user_revoked:{user_id}"
         result = await redis.get(key)
         return result is not None

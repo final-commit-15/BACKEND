@@ -1,33 +1,52 @@
 services:
-  postgres:
+  db:
     image: postgres:16-alpine
-    container_name: agentforge-postgres
+    container_name: agentforge-db
     environment:
-      POSTGRES_USER: backend
-      POSTGRES_PASSWORD: backendpass
-      POSTGRES_DB: agentforge
+      POSTGRES_USER: ${POSTGRES_USER:-agentforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-agentforge}
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - agentforge_db_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U backend -d agentforge"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentforge} -d ${POSTGRES_DB:-agentforge}"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+    command: >
+      postgres
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=128MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=16MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
 
   redis:
     image: redis:7-alpine
     container_name: agentforge-redis
     ports:
       - "6379:6379"
+    volumes:
+      - agentforge_redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
 
   backend:
     build:
@@ -35,19 +54,19 @@ services:
       dockerfile: Dockerfile
     container_name: agentforge-backend
     ports:
-    - "8000:8000"
+      - "8000:8000"
     environment:
-       - ENVIRONMENT=development
-       - DATABASE_URL=postgresql+asyncpg://backend:backendpass@postgres:5432/agentforge
-       - REDIS_URL=redis://redis:6379/0
-       - JWT_SECRET=change_this_in_production_please
-       - CORS_ORIGINS=["http://localhost:3000","http://localhost:8000"]
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-agentforge}
+      - REDIS_URL=redis://agentforge-redis:6379/0
+      - JWT_SECRET=${JWT_SECRET}
+      - CORS_ORIGINS=${CORS_ORIGINS}
     depends_on:
-      postgres:
-       condition: service_healthy
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn agentforge_backend.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn agentforge_backend.main:app --host 0.0.0.0 --port 8000
     volumes:
       - ./src:/app/src
       - ./pyproject.toml:/app/pyproject.toml
@@ -62,17 +81,17 @@ services:
       dockerfile: Dockerfile
     container_name: agentforge-worker
     environment:
-      - ENVIRONMENT=development
-      - DATABASE_URL=postgresql+asyncpg://backend:backendpass@postgres:5432/agentforge
-      - REDIS_URL=redis://redis:6379/0
-      - CELERY_BROKER_URL=redis://redis:6379/1
-      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-agentforge}
+      - REDIS_URL=redis://agentforge-redis:6379/0
+      - CELERY_BROKER_URL=redis://agentforge-redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://agentforge-redis:6379/2
     depends_on:
-      postgres:
+      db:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A agentforge_backend.workers.celery_app worker --loglevel=info
+    command: celery -A agentforge_backend.workers.celery_app worker --loglevel=info --concurrency=4
     volumes:
       - ./src:/app/src
     networks:
@@ -88,7 +107,8 @@ services:
 
 networks:
   agentforge-network:
-    external: true
+    driver: bridge
 
 volumes:
-  postgres_data:
+  agentforge_db_data:
+  agentforge_redis_data:

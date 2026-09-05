@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError, OperationalError, DisconnectionError
 from typing import Optional
 
 from ...db.session import get_db
@@ -12,7 +13,7 @@ from ...schemas.auth import (
     RefreshRequest,
     LogoutRequest,
 )
-from ...utils.exceptions import AuthenticationError, ConflictError
+from ...utils.exceptions import AuthenticationError, ConflictError, DatabaseError, AgentForgeException
 from ...middleware.rate_limiter import limiter
 from ...utils.logging import get_logger
 from ..deps import get_current_user
@@ -21,6 +22,11 @@ from ...middleware.auth import get_current_user_id
 
 router = APIRouter()
 logger = get_logger("auth")
+
+
+def _handle_agentforge_exception(e: AgentForgeException) -> HTTPException:
+    """Convert AgentForge exceptions to HTTP exceptions."""
+    return HTTPException(status_code=e.status_code, detail=e.message)
 
 
 @router.post("/register", response_model=UserResponse, status_code=201)
@@ -34,8 +40,8 @@ async def register(
     try:
         db_user = await AuthService.register(db, user)
         return db_user
-    except ConflictError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except AgentForgeException as e:
+        raise _handle_agentforge_exception(e)
     except Exception as e:
         logger.error("registration_failed", error=str(e), email=user.email)
         raise HTTPException(status_code=500, detail="Registration failed")
@@ -53,8 +59,8 @@ async def login(
         ip = request.client.host if request.client else None
         tokens = await AuthService.login(db, login_data.email, login_data.password, ip)
         return tokens
-    except AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+    except AgentForgeException as e:
+        raise _handle_agentforge_exception(e)
     except Exception as e:
         logger.error("login_failed", error=str(e), email=login_data.email)
         raise HTTPException(status_code=500, detail="Login failed")
@@ -72,8 +78,8 @@ async def refresh_token(
         ip = request.client.host if request.client else None
         tokens = await AuthService.refresh_token(db, refresh_data.refresh_token, ip)
         return tokens
-    except AuthenticationError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+    except AgentForgeException as e:
+        raise _handle_agentforge_exception(e)
     except Exception as e:
         logger.error("token_refresh_failed", error=str(e))
         raise HTTPException(status_code=500, detail="Token refresh failed")
@@ -97,6 +103,8 @@ async def logout(
             revoke_all=logout_data.revoke_all,
             ip_address=ip,
         )
+    except AgentForgeException as e:
+        raise _handle_agentforge_exception(e)
     except Exception as e:
         logger.error("logout_failed", error=str(e), user_id=current_user_id)
         raise HTTPException(status_code=500, detail="Logout failed")

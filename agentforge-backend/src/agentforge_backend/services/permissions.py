@@ -2,7 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete
 from uuid import UUID
 from typing import List, Dict, Any
-from ..models.permissions import Permission, Role, user_roles, role_permissions
+from ..models.permission import Permission, Role
 from sqlalchemy.orm import selectinload
 from typing import Optional, List, Dict, Any
 

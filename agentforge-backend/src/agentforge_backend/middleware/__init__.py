@@ -1,5 +1,5 @@
 from .auth import get_current_user_id
-from .rate_limiter import limiter, rate_limit_exceeded_handler, get_limiter
+from .rate_limiter import limiter, rate_limit_exceeded_handler, get_limiter, add_rate_limiter_middleware
 from .security_headers import add_security_headers_middleware
 from .request_logging import add_request_logging_middleware
 from .rbac import (
@@ -16,6 +16,7 @@ __all__ = [
     "limiter",
     "rate_limit_exceeded_handler",
     "get_limiter",
+    "add_rate_limiter_middleware",
     "add_security_headers_middleware",
     "add_request_logging_middleware",
     "require_permission",

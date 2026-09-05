@@ -1,9 +1,14 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List, Optional
 import json
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="allow",
+    )
     ENVIRONMENT: str = "development"
     LOG_LEVEL: str = "INFO"
     APP_VERSION: str = "1.0.0"
@@ -31,6 +36,8 @@ class Settings(BaseSettings):
     CORS_ALLOW_CREDENTIALS: bool = True
     CORS_ALLOW_METHODS: str = '["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]'
     CORS_ALLOW_HEADERS: str = '["*"]'
+    CORS_EXPOSE_HEADERS: str = '["*"]'
+    CORS_MAX_AGE: int = 600
 
     # Security
     SECURITY_HEADERS_ENABLED: bool = True
@@ -68,7 +75,15 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> List[str]:
-        return json.loads(self.CORS_ORIGINS)
+        origins = json.loads(self.CORS_ORIGINS)
+        # Normalize: strip trailing slashes for consistent matching
+        normalized = [origin.rstrip("/") for origin in origins]
+        # Also include versions with trailing slash to handle browser variations
+        result = []
+        for origin in normalized:
+            result.append(origin)
+            result.append(origin + "/")
+        return result
 
     @property
     def cors_allow_methods_list(self) -> List[str]:
@@ -85,10 +100,6 @@ class Settings(BaseSettings):
     @property
     def log_sensitive_fields_list(self) -> List[str]:
         return json.loads(self.LOG_SENSITIVE_FIELDS)
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 settings = Settings()

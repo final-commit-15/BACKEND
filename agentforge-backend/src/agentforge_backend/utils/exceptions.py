@@ -20,3 +20,7 @@ class PermissionDeniedError(AgentForgeException):
 class ConflictError(AgentForgeException):
     def __init__(self, message: str = "Conflict"):
         super().__init__(message, code="conflict", status_code=409)
+
+class DatabaseError(AgentForgeException):
+    def __init__(self, message: str = "Database unavailable"):
+        super().__init__(message, code="database_error", status_code=503)

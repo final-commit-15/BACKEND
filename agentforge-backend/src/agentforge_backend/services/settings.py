@@ -2,7 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from uuid import UUID
 from typing import Optional, Dict, Any
-from ..models.settings import WorkspaceSettings
+from ..models.workspace_settings import WorkspaceSettings
 
 class SettingsService:
     def __init__(self, db: AsyncSession):
