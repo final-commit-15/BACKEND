@@ -25,23 +25,71 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Determine the database URL for migrations
-# If running inside Docker (ALEMBIC_DOCKER=1), use the service name
-# Otherwise, replace docker service names with localhost for host-based migrations
 migration_db_url = settings.DATABASE_URL
 
 # Check if we're running inside Docker
 running_in_docker = os.environ.get("ALEMBIC_DOCKER", "0") == "1"
 
 if running_in_docker:
-    # Inside Docker, use the service name as-is (db:5432)
+    # Inside Docker, use the service name as-is
     print(f"Running inside Docker, using service name: {migration_db_url}")
 else:
-    # Outside Docker (host), replace docker service names with localhost
-    # The docker-compose.yml maps port 5432 to localhost:5432
-    for service_name in ["postgres:", "db:"]:
-        if service_name in migration_db_url:
-            migration_db_url = migration_db_url.replace(service_name, "localhost:")
-    print(f"Running on host, using localhost: {migration_db_url}")
+    # Outside Docker (host), only replace Docker service names in the host part
+    # URL format: scheme://[user:pass@]host:port/database
+    # We only replace if host is a Docker service name (postgres, db)
+    # and NOT a real hostname like db.xxx.supabase.co
+    
+    def replace_docker_service(url: str) -> str:
+        # Check if URL already has a real hostname (contains a dot in host part)
+        # Real hostnames like db.xxx.supabase.co have dots, Docker services don't
+        
+        # Find the authority part: //[user:pass@]host[:port]
+        # Split by // to get authority part
+        if '://' not in url:
+            return url
+        
+        scheme, rest = url.split('://', 1)
+        
+        # Find the end of authority (start of path)
+        # Authority ends at / or end of string
+        auth_end = len(rest)
+        for sep in ['/', '?', '#']:
+            idx = rest.find(sep)
+            if idx != -1 and idx < auth_end:
+                auth_end = idx
+        
+        authority = rest[:auth_end]
+        path = rest[auth_end:]
+        
+        # Split authority into [user:pass@]host[:port]
+        # Find the last @ to separate user:pass from host
+        at_idx = authority.rfind('@')
+        if at_idx != -1:
+            userinfo = authority[:at_idx+1]
+            hostport = authority[at_idx+1:]
+        else:
+            userinfo = ''
+            hostport = authority
+        
+        # Split host:port
+        if ':' in hostport:
+            host, port = hostport.split(':', 1)
+        else:
+            host = hostport
+            port = ''
+        
+        # Only replace if host is a Docker service name (no dots)
+        # Real hostnames have dots like db.xxx.supabase.co
+        if host in ('postgres', 'db') and '.' not in host:
+            new_host = 'localhost'
+            new_hostport = f'{new_host}:{port}' if port else new_host
+            new_authority = f'{userinfo}{new_hostport}'
+            return f'{scheme}://{new_authority}{path}'
+        
+        return url
+    
+    migration_db_url = replace_docker_service(migration_db_url)
+    print(f"Running on host, using: {migration_db_url}")
 
 config.set_main_option("sqlalchemy.url", migration_db_url)
 

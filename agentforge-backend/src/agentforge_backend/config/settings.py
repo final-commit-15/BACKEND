@@ -13,12 +13,19 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     APP_VERSION: str = "1.0.0"
 
-    DATABASE_URL: str = "postgresql+asyncpg://backend:backendpass@localhost:5432/agentforge"
+    # Supabase Configuration
+    SUPABASE_URL: str = ""
+    SUPABASE_ANON_KEY: str = ""
+    SUPABASE_SERVICE_ROLE_KEY: str = ""
+
+    # Database - Supabase PostgreSQL
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/postgres"
     DATABASE_POOL_SIZE: int = 10
     DATABASE_MAX_OVERFLOW: int = 20
     DATABASE_POOL_TIMEOUT: int = 30
     DATABASE_POOL_RECYCLE: int = 3600
 
+    # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
     # JWT settings
@@ -72,6 +79,15 @@ class Settings(BaseSettings):
     # Logging
     STRUCTURED_LOGGING: bool = True
     LOG_SENSITIVE_FIELDS: str = '["password", "token", "secret", "authorization", "cookie", "api_key", "refresh_token"]'
+
+    # Supabase Storage Buckets
+    STORAGE_BUCKET_AGENT_ASSETS: str = "agent-assets"
+    STORAGE_BUCKET_WORKSPACE_FILES: str = "workspace-files"
+    STORAGE_BUCKET_AVATARS: str = "avatars"
+    STORAGE_BUCKET_DOCUMENTS: str = "documents"
+
+    # Backend URL for webhooks
+    BACKEND_URL: str = "http://localhost:8000"
 
     @property
     def cors_origins_list(self) -> List[str]:

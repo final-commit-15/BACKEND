@@ -1,37 +1,4 @@
 services:
-  db:
-    image: postgres:16-alpine
-    container_name: agentforge-db
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-agentforge}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB:-agentforge}
-    ports:
-      - "5432:5432"
-    volumes:
-      - agentforge_db_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentforge} -d ${POSTGRES_DB:-agentforge}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 10s
-    restart: unless-stopped
-    command: >
-      postgres
-      -c max_connections=200
-      -c shared_buffers=256MB
-      -c effective_cache_size=1GB
-      -c maintenance_work_mem=128MB
-      -c checkpoint_completion_target=0.9
-      -c wal_buffers=16MB
-      -c default_statistics_target=100
-      -c random_page_cost=1.1
-      -c effective_io_concurrency=200
-      -c work_mem=16MB
-      -c min_wal_size=1GB
-      -c max_wal_size=4GB
-
   redis:
     image: redis:7-alpine
     container_name: agentforge-redis
@@ -57,13 +24,16 @@ services:
       - "8000:8000"
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-agentforge}
+      - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://agentforge-redis:6379/0
       - JWT_SECRET=${JWT_SECRET}
       - CORS_ORIGINS=${CORS_ORIGINS}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_WEBHOOK_SECRET=${SUPABASE_WEBHOOK_SECRET}
+      - BACKEND_URL=${BACKEND_URL}
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     command: uvicorn agentforge_backend.main:app --host 0.0.0.0 --port 8000
@@ -82,13 +52,14 @@ services:
     container_name: agentforge-worker
     environment:
       - ENVIRONMENT=${ENVIRONMENT:-development}
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-agentforge}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-agentforge}
+      - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=redis://agentforge-redis:6379/0
       - CELERY_BROKER_URL=redis://agentforge-redis:6379/1
       - CELERY_RESULT_BACKEND=redis://agentforge-redis:6379/2
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     command: celery -A agentforge_backend.workers.celery_app worker --loglevel=info --concurrency=4
@@ -110,5 +81,4 @@ networks:
     driver: bridge
 
 volumes:
-  agentforge_db_data:
   agentforge_redis_data:
